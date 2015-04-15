@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	. "github.com/0x19/goesl"
 	. "github.com/xuyu/goredis"
 	"runtime"
@@ -24,16 +25,7 @@ func main() {
 	// Boost it as much as it can go ...
 	runtime.GOMAXPROCS(runtime.NumCPU())
 
-	client, err := Dial(&DialConfig{Address: "127.0.0.1:6379"})
-	if err != nil {
-
-		Error("Error occur in connecting redis", err)
-		return
-
-	}
-
 	///////////////////////register with ards as a requester//////////////////////////////////////////
-	client.SimpleSet("ARDSCOnnector", "Started")
 
 	if s, err := NewOutboundServer(":8084"); err != nil {
 		Error("Got error while starting FreeSWITCH outbound server: %s", err)
@@ -72,7 +64,7 @@ func handle(s *OutboundServer) {
 				to := msg.GetHeader("Caller-Destination-Number")
 				direction := msg.GetHeader("Call-Direction")
 				channelStatus := msg.GetHeader("Answer-State")
-				originateSession := msg.GetHeader("variable_Originate_session_uuid")
+				originateSession := msg.GetHeader("Variable_originate_session_uuid")
 				fsUUID := msg.GetHeader("Core-Uuid")
 				fsHost := msg.GetHeader("Freeswitch-Hostname")
 				fsName := msg.GetHeader("Freeswitch-Switchname")
@@ -100,31 +92,66 @@ func handle(s *OutboundServer) {
 				Debug(originateSession)
 				Debug(callerContext)
 
+				client, err := Dial(&DialConfig{Address: "127.0.0.1:6379"})
+
+				if err != nil {
+
+					Error("Error occur in connecting redis", err)
+					return
+
+				}
+
 				if direction == "outbound" {
+					Debug("OutBound Call recived ---->")
 
 					if channelStatus != "answered" {
+						////////////////////////////////////////////////////////////
+						if len(originateSession) > 0 {
 
-						conn.Execute("wait_for_answer", "", false)
+							Debug("Original session found %s", originateSession)
 
-						conn.ExecuteUUID(originateSession, "break", "", false)
+							var isStored = true
+							partykey := fmt.Sprintf("ARDS:Leg:%s", uniqueID)
+							redisErr := client.SimpleSet(partykey, originateSession)
+							Debug("Store Data : %s ", redisErr)
+							key := fmt.Sprintf("ARDS:Session:%s", originateSession)
+							isStored, redisErr = client.HSet(key, "AgentStatus", "AgentFound")
+							Debug("Store Data : %s %s", isStored, redisErr)
+							isStored, redisErr = client.HSet(key, "AgentUUID", uniqueID)
+							Debug("Store Data : %s %s", isStored, redisErr)
 
-						go func() {
-							for {
-								msg, err := conn.ReadMessage()
+							_, waiterr := conn.Execute("wait_for_answer", "", true)
 
-								if err != nil {
+							Debug("Call answered %s", waiterr)
 
-									// If it contains EOF, we really dont care...
-									if !strings.Contains(err.Error(), "EOF") {
-										Error("Error while reading Freeswitch message: %s", err)
+							if waiterr == nil {
+
+								isStored, redisErr = client.HSet(key, "AgentStatus", "AgentConnected")
+
+								//conn.Execute("uuid_break", originateSession, true)
+
+								go func() {
+									for {
+										msg, err := conn.ReadMessage()
+
+										if err != nil {
+
+											// If it contains EOF, we really dont care...
+											if !strings.Contains(err.Error(), "EOF") {
+												Error("Error while reading Freeswitch message: %s", err)
+											}
+											break
+										}
+
+										Debug("Got message: %s", msg)
 									}
-									break
-								}
+									Debug("Leaving go routing after everithing completed")
+								}()
 
-								Debug("Got message: %s", msg)
 							}
-							Debug("Leaving go routing after everithing completed")
-						}()
+
+						}
+						/////////////////////////////////////////////////////////////
 					}
 
 				} else {
@@ -143,11 +170,67 @@ func handle(s *OutboundServer) {
 
 					//conn.Send("myevents")
 
-					eventsync := make(chan string)
+					//////////////////////////////////////////Add to queue//////////////////////////////////////
 
-					go func(sysncchannel chan string) {
+					key := fmt.Sprintf("ARDS:Session:%s", uniqueID)
 
-						conn.Send("myevents json")
+					partykey := fmt.Sprintf("ARDS:Leg:%s", uniqueID)
+					var isStored = true
+					Debug("key ---> %s ", partykey)
+					redisErr := client.SimpleSet(partykey, uniqueID)
+					Debug("Store Data : %s ", redisErr)
+
+					Debug("key ---> %s ", key)
+					isStored, redisErr = client.HSet(key, "CallStatus", "CallOnQueue")
+					Debug("Store Data : %s ", redisErr)
+					isStored, redisErr = client.HSet(key, "AgentStatus", "NotFound")
+
+					Debug("Store Data : %s %s ", redisErr, isStored)
+
+					if sm, err := conn.Execute("playback", "local_stream://moh", true); err != nil {
+						Error("Got error while executing speak: %s", err)
+						break
+					} else {
+
+						Debug("Playback reply %s", sm)
+
+						/////////////////////////////////////////////////check agent connectivity////////////////////
+
+						value1, getErr1 := client.HGet(key, "AgentStatus")
+						sValue1 := string(value1[:])
+
+						value2, getErr2 := client.HGet(key, "AgentUUID")
+						sValue2 := string(value2[:])
+
+						Debug("Client side connection values %s %s %s %s", getErr1, getErr2, sValue1, sValue2)
+
+						if getErr1 != nil && getErr2 != nil && sValue1 == "AgentConnected" && len(sValue2) > 0 {
+
+							/////////////////////////////////////////////////Bridge call/////////////////////////////////
+							_, err := conn.Execute("uuid_bridge", fmt.Sprintf("%s %s", uniqueID, sValue2), true)
+
+							Debug("Bridge reply %s ", err)
+
+							/////////////////////////////////////////////////////////////////////////////////////////////
+
+						} else {
+
+							Warning("Might be call is going to disconnect ----> ")
+
+							if hm, err := conn.ExecuteHangup(cUUID, "", false); err != nil {
+								Error("Got error while executing hangup: %s", err)
+								break
+							} else {
+								Debug("Hangup Message: %s", hm)
+							}
+						}
+
+					}
+
+					/////////////////////////////////////////////////////////////////////////////////////////////////
+
+					go func() {
+
 						for {
 							msg, err := conn.ReadMessage()
 
@@ -159,56 +242,12 @@ func handle(s *OutboundServer) {
 								}
 
 								break
-							} else {
-
-								//Debug("Message recive with event name -> %s", msg.GetHeader("Event-Name"))
-								sysncchannel <- msg.GetHeader("Event-Name")
-
 							}
 
-							//Debug("Got message: %s", msg)
+							Debug("Got message: %s", msg)
 						}
 						Debug("Leaving go routing after everithing completed")
-					}(eventsync)
-
-					//////////////////////////////////////////Add to queue//////////////////////////////////////
-					if sm, err := conn.Execute("playback", "local_stream://moh", true); err != nil {
-						Error("Got error while executing speak: %s", err)
-						break
-					} else {
-
-						Debug("Playback reply %s", sm)
-
-						/*
-							for {
-
-								select {
-
-								case msgx := <-eventsync:
-									{
-										Debug(msgx)
-									}
-								}
-
-							}*/
-
-						//}
-
-						/////////////////////////////////////////////////check agent connectivity////////////////////
-
-						/////////////////////////////////////////////////Bridge call/////////////////////////////////
-
-						/////////////////////////////////////////////////////////////////////////////////////////////
-					}
-
-					/////////////////////////////////////////////////////////////////////////////////////////////////
-
-					if hm, err := conn.ExecuteHangup(cUUID, "", false); err != nil {
-						Error("Got error while executing hangup: %s", err)
-						break
-					} else {
-						Debug("Hangup Message: %s", hm)
-					}
+					}()
 
 				}
 
