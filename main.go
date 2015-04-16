@@ -120,35 +120,44 @@ func handle(s *OutboundServer) {
 							isStored, redisErr = client.HSet(key, "AgentUUID", uniqueID)
 							Debug("Store Data : %s %s", isStored, redisErr)
 
-							_, waiterr := conn.Execute("wait_for_answer", "", true)
+							conn.Execute("wait_for_answer", "", true)
 
-							Debug("Call answered %s", waiterr)
+							isStored, redisErr = client.HSet(key, "AgentStatus", "AgentConnected")
 
-							if waiterr == nil {
+							conn.ExecuteSet("CHANNEL_CONNECTION", "true", false)
 
-								isStored, redisErr = client.HSet(key, "AgentStatus", "AgentConnected")
+							/*
 
-								//conn.Execute("uuid_break", originateSession, true)
+								breakCommand := fmt.Sprintf("uuid_break %s all", originateSession)
 
-								go func() {
-									for {
-										msg, err := conn.ReadMessage()
+								conn.BgApi(breakCommand)
+							*/
 
-										if err != nil {
+							cmd := fmt.Sprintf("uuid_bridge %s %s", originateSession, uniqueID)
+							Debug(cmd)
+							conn.BgApi(cmd)
 
-											// If it contains EOF, we really dont care...
-											if !strings.Contains(err.Error(), "EOF") {
-												Error("Error while reading Freeswitch message: %s", err)
-											}
-											break
+							go func() {
+								for {
+									msg, err := conn.ReadMessage()
+
+									if err != nil {
+
+										// If it contains EOF, we really dont care...
+										if !strings.Contains(err.Error(), "EOF") {
+											Error("Error while reading Freeswitch message: %s", err)
 										}
-
-										Debug("Got message: %s", msg)
+										break
 									}
-									Debug("Leaving go routing after everithing completed")
-								}()
 
-							}
+									Debug("Got message: %s", msg)
+								}
+								Debug("Leaving go routing after everithing completed Inbound")
+								client.Del(key)
+								client.Del(partykey)
+							}()
+
+							//}
 
 						}
 						/////////////////////////////////////////////////////////////
@@ -166,7 +175,7 @@ func handle(s *OutboundServer) {
 					Debug("Answer Message: %s", answer)
 					Debug("Caller UUID: %s", uniqueID)
 
-					cUUID := uniqueID
+					//cUUID := uniqueID
 
 					//conn.Send("myevents")
 
@@ -187,45 +196,17 @@ func handle(s *OutboundServer) {
 
 					Debug("Store Data : %s %s ", redisErr, isStored)
 
-					if sm, err := conn.Execute("playback", "local_stream://moh", true); err != nil {
+					conn.Send("myevents json")
+					if sm, err := conn.Execute("playback", "local_stream://moh", false); err != nil {
 						Error("Got error while executing speak: %s", err)
 						break
 					} else {
 
 						Debug("Playback reply %s", sm)
 
-						/////////////////////////////////////////////////check agent connectivity////////////////////
-
-						value1, getErr1 := client.HGet(key, "AgentStatus")
-						sValue1 := string(value1[:])
-
-						value2, getErr2 := client.HGet(key, "AgentUUID")
-						sValue2 := string(value2[:])
-
-						Debug("Client side connection values %s %s %s %s", getErr1, getErr2, sValue1, sValue2)
-
-						if getErr1 != nil && getErr2 != nil && sValue1 == "AgentConnected" && len(sValue2) > 0 {
-
-							/////////////////////////////////////////////////Bridge call/////////////////////////////////
-							_, err := conn.Execute("uuid_bridge", fmt.Sprintf("%s %s", uniqueID, sValue2), true)
-
-							Debug("Bridge reply %s ", err)
-
-							/////////////////////////////////////////////////////////////////////////////////////////////
-
-						} else {
-
-							Warning("Might be call is going to disconnect ----> ")
-
-							if hm, err := conn.ExecuteHangup(cUUID, "", false); err != nil {
-								Error("Got error while executing hangup: %s", err)
-								break
-							} else {
-								Debug("Hangup Message: %s", hm)
-							}
-						}
-
 					}
+
+					Debug("Leaving go routing after everithing completed Inbound")
 
 					/////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -242,11 +223,55 @@ func handle(s *OutboundServer) {
 								}
 
 								break
-							}
+							} else {
+								if msg != nil {
 
+									uuid := msg.GetHeader("Unique-ID")
+									Debug(uuid)
+
+									//key := fmt.Sprintf("ARDS:Session:%s", uniqueID)
+									//partykey := fmt.Sprintf("ARDS:Leg:%s", uniqueID)
+
+									contentType := msg.GetHeader("Content-Type")
+									event := msg.GetHeader("Event-Name")
+									application := msg.GetHeader("variable_current_application")
+									//response := msg.GetHeader("variable_current_application_response")
+									if contentType == "text/disconnect-notice" {
+
+										//key := fmt.Sprintf("ARDS:Session:%s", uniqueID)
+
+									} else {
+
+										if event == "CHANNEL_EXECUTE_COMPLETE" && application == "playback" {
+
+											value1, getErr1 := client.HGet(key, "AgentStatus")
+											sValue1 := string(value1[:])
+
+											value2, getErr2 := client.HGet(key, "AgentUUID")
+											sValue2 := string(value2[:])
+
+											Debug("Client side connection values %s %s %s %s", getErr1, getErr2, sValue1, sValue2)
+
+											if getErr1 == nil && getErr2 == nil && sValue1 == "AgentConnected" && len(sValue2) > 0 {
+
+												/*
+													cmd := fmt.Sprintf("uuid_bridge %s %s", uuid, sValue2)
+
+													Debug(cmd)
+													conn.BgApi(cmd)
+
+												*/
+
+											}
+										}
+									}
+								}
+							}
 							Debug("Got message: %s", msg)
 						}
-						Debug("Leaving go routing after everithing completed")
+						Debug("Leaving go routing after everithing completed Inbound")
+						client.Del(key)
+						client.Del(partykey)
 					}()
 
 				}
