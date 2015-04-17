@@ -110,6 +110,40 @@ func main() {
 
 }
 
+func RemoveRequest(company, tenant, sessionid string) {
+
+	r := restclient.RequestResponse{
+		Url:    fmt.Sprintf("http://192.168.0.25:2225/request/remove/%s/%s/%s", company, tenant, sessionid),
+		Method: "DELETE",
+	}
+	status, err := restclient.Do(&r)
+	if err != nil {
+		//panic(err)
+		fmt.Printf("MSG error -------------------------------------> %s", err)
+	}
+	if status == 200 {
+		//fmt.Printf(registered)
+	}
+
+}
+
+func RejectRequest(company, tenant, sessionid, reason string) {
+
+	r := restclient.RequestResponse{
+		Url:    fmt.Sprintf("http://192.168.0.25:2225/request/reject/%s/%s/%s/%s", company, tenant, sessionid, reason),
+		Method: "DELETE",
+	}
+	status, err := restclient.Do(&r)
+	if err != nil {
+		//panic(err)
+		fmt.Printf("MSG error -------------------------------------> %s", err)
+	}
+	if status == 200 {
+		//fmt.Printf(registered)
+	}
+
+}
+
 // handle - Running under goroutine here to explain how to run tts outbound server
 func handle(s *OutboundServer) {
 
@@ -202,9 +236,9 @@ func handle(s *OutboundServer) {
 								//msg, err = conn.ExecuteSet("CHANNEL_CONNECTION", "true", false)
 								//Debug("Set variable ----> %s", msg)
 
-								conn.Send("myevents json")
-
 							} else {
+
+								RejectRequest("1", "3", originateSession, "ClientReject")
 
 								cmd := fmt.Sprintf("uuid_kill %s ", uniqueID)
 								Debug(cmd)
@@ -212,6 +246,7 @@ func handle(s *OutboundServer) {
 
 							}
 
+							conn.Send("myevents json")
 							go func() {
 								for {
 									msg, err := conn.ReadMessage()
@@ -221,8 +256,10 @@ func handle(s *OutboundServer) {
 										// If it contains EOF, we really dont care...
 										if !strings.Contains(err.Error(), "EOF") {
 											Error("Error while reading Freeswitch message: %s", err)
+
 										}
 										break
+
 									} else {
 										if msg != nil {
 
@@ -231,6 +268,8 @@ func handle(s *OutboundServer) {
 
 											contentType := msg.GetHeader("Content-Type")
 											event := msg.GetHeader("Event-Name")
+											Debug("Content types -------------------->", contentType)
+
 											if contentType == "text/disconnect-notice" {
 
 												//key := fmt.Sprintf("ARDS:Session:%s", uniqueID)
@@ -246,6 +285,8 @@ func handle(s *OutboundServer) {
 													conn.BgApi(cmd)
 													/////////////////////Remove///////////////////////
 
+													RemoveRequest("1", "3", originateSession)
+
 												} else if event == "CHANNEL_HANGUP" {
 
 													value1, getErr1 := client.HGet(key, "AgentStatus")
@@ -255,6 +296,10 @@ func handle(s *OutboundServer) {
 														if agentstatus != "AgentConnected" {
 
 															//////////////////////////////Reject//////////////////////////////////////////////
+															//http://localhost:2225/request/remove/company/tenant/sessionid
+
+															RejectRequest("1", "3", originateSession, "AgentRejected")
+
 														}
 													}
 
@@ -265,8 +310,8 @@ func handle(s *OutboundServer) {
 
 									Debug("Got message: %s", msg)
 								}
-								Debug("Leaving go routing after everithing completed Inbound")
-								client.Del(key)
+								Debug("Leaving go routing after everithing completed OutBound %s %s", key, partykey)
+								//client.Del(key)
 								client.Del(partykey)
 							}()
 
@@ -280,7 +325,7 @@ func handle(s *OutboundServer) {
 
 					if err != nil {
 						Error("Got error while executing answer: %s", err)
-						break
+
 					}
 
 					Debug("Answer Message: %s", answer)
@@ -343,7 +388,7 @@ func handle(s *OutboundServer) {
 					conn.Send("myevents json")
 					if sm, err := conn.Execute("playback", "local_stream://moh", false); err != nil {
 						Error("Got error while executing speak: %s", err)
-						break
+
 					} else {
 
 						Debug("Playback reply %s", sm)
@@ -364,9 +409,11 @@ func handle(s *OutboundServer) {
 								// If it contains EOF, we really dont care...
 								if !strings.Contains(err.Error(), "EOF") {
 									Error("Error while reading Freeswitch message: %s", err)
+
 								}
 
 								break
+
 							} else {
 								if msg != nil {
 
@@ -376,6 +423,8 @@ func handle(s *OutboundServer) {
 									contentType := msg.GetHeader("Content-Type")
 									event := msg.GetHeader("Event-Name")
 									application := msg.GetHeader("variable_current_application")
+
+									Debug("Content types -------------------->", contentType)
 									//response := msg.GetHeader("variable_current_application_response")
 									if contentType == "text/disconnect-notice" {
 
@@ -405,6 +454,8 @@ func handle(s *OutboundServer) {
 												if agentstatus != "AgentConnected" {
 
 													//////////////////////////////Remove//////////////////////////////////////////////
+
+													RemoveRequest("1", "3", uniqueID)
 												}
 											}
 
@@ -414,7 +465,7 @@ func handle(s *OutboundServer) {
 							}
 							//Debug("Got message: %s", msg)
 						}
-						Debug("Leaving go routing after everithing completed Inbound")
+						Debug("Leaving go routing after everithing completed Inbound %s %s", key, partykey)
 						client.Del(key)
 						client.Del(partykey)
 					}()
