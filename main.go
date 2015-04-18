@@ -1,6 +1,7 @@
 package main
 
 import (
+	"code.google.com/p/gcfg"
 	"fmt"
 	. "github.com/0x19/goesl"
 	"github.com/jmcvetta/restclient"
@@ -12,6 +13,28 @@ import (
 var (
 	goeslMessage = "Hello from GoESL. Open source FreeSWITCH event socket wrapper written in Go!"
 )
+
+type Config struct {
+	server struct {
+		Ip   string
+		Port int
+	}
+
+	dispatcher struct {
+		Ip   string
+		Port int
+	}
+
+	ards struct {
+		Ip   string
+		Port int
+	}
+
+	redis struct {
+		Ip   string
+		Port int
+	}
+}
 
 type ServerInfo struct {
 	Company     int
@@ -59,8 +82,11 @@ public class InputData
 */
 
 var client *Redis
+var cfg Config
 
 func main() {
+
+	err := gcfg.ReadFileInto(&cfg, "config.ini")
 
 	defer func() {
 		if r := recover(); r != nil {
@@ -73,6 +99,10 @@ func main() {
 
 	///////////////////////register with ards as a requester//////////////////////////////////////////
 
+	callbakURL := fmt.Sprint("http://%s:%d/route", cfg.dispatcher.Ip, cfg.dispatcher.Port)
+
+	ardsADDServerURL := fmt.Sprint("http://%s:%d/requestserver/add", cfg.ards.Ip, cfg.ards.Port)
+
 	registered := true
 
 	f := ServerInfo{
@@ -81,12 +111,12 @@ func main() {
 		Class:       "CALLSERVER",
 		Type:        "ARDS",
 		Category:    "CALL",
-		CallbackUrl: "http://192.168.0.79:8086/route",
+		CallbackUrl: callbakURL,
 		ServerID:    1,
 	}
 
 	r := restclient.RequestResponse{
-		Url:    "http://192.168.0.25:2225/requestserver/add",
+		Url:    ardsADDServerURL,
 		Method: "POST",
 		Data:   &f,
 		Result: &registered,
@@ -101,7 +131,7 @@ func main() {
 
 	///////////////////////////////////////////////////////////////////////////////////////////////////////
 
-	if s, err := NewOutboundServer(":8084"); err != nil {
+	if s, err := NewOutboundServer(fmt.Sprint(":%d", cfg.server.Port)); err != nil {
 		Error("Got error while starting FreeSWITCH outbound server: %s", err)
 	} else {
 		go handle(s)
@@ -110,10 +140,10 @@ func main() {
 
 }
 
-func RemoveRequest(company, tenant, sessionid string) {
+func RemoveRequest(company, tenant int, sessionid string) {
 
 	r := restclient.RequestResponse{
-		Url:    fmt.Sprintf("http://192.168.0.25:2225/request/remove/%s/%s/%s", company, tenant, sessionid),
+		Url:    fmt.Sprintf("http://%s:%d/request/remove/%d/%d/%s", cfg.ards.Ip, cfg.ards.Port, company, tenant, sessionid),
 		Method: "DELETE",
 	}
 	status, err := restclient.Do(&r)
@@ -127,10 +157,10 @@ func RemoveRequest(company, tenant, sessionid string) {
 
 }
 
-func RejectRequest(company, tenant, sessionid, reason string) {
+func RejectRequest(company, tenant int, sessionid, reason string) {
 
 	r := restclient.RequestResponse{
-		Url:    fmt.Sprintf("http://192.168.0.25:2225/request/reject/%s/%s/%s/%s", company, tenant, sessionid, reason),
+		Url:    fmt.Sprintf("http://%s,%d/request/reject/%d/%d/%s/%s", cfg.ards.Ip, cfg.ards.Port, company, tenant, sessionid, reason),
 		Method: "DELETE",
 	}
 	status, err := restclient.Do(&r)
@@ -140,6 +170,46 @@ func RejectRequest(company, tenant, sessionid, reason string) {
 	}
 	if status == 200 {
 		//fmt.Printf(registered)
+	}
+
+}
+
+func AddRequest(company, tenant int, sessionid string) {
+
+	var registered string
+
+	attrib := []string{"123456"}
+	f := RequestData{
+		Company:         company,
+		Tenant:          tenant,
+		Class:           "CALLSERVER",
+		Type:            "ARDS",
+		Category:        "CALL",
+		SessionId:       sessionid,
+		RequestServerId: "1",
+		Priority:        "L",
+		OtherInfo:       "",
+		Attributes:      attrib,
+	}
+
+	postData := Request1{
+
+		Request1: f,
+	}
+
+	r := restclient.RequestResponse{
+		Url:    fmt.Sprintf("http://%s,%d/startArds/web/Start", cfg.ards.Ip, cfg.ards.Port),
+		Method: "POST",
+		Data:   &postData,
+		Result: &registered,
+	}
+	status, err := restclient.Do(&r)
+	if err != nil {
+		//panic(err)
+		fmt.Printf("%s", err)
+	}
+	if status == 200 {
+		fmt.Printf(registered)
 	}
 
 }
@@ -147,7 +217,7 @@ func RejectRequest(company, tenant, sessionid, reason string) {
 // handle - Running under goroutine here to explain how to run tts outbound server
 func handle(s *OutboundServer) {
 
-	client, err := Dial(&DialConfig{Address: "127.0.0.1:6379"})
+	client, err := Dial(&DialConfig{Address: fmt.Sprint("%s:%d", cfg.redis.Ip, cfg.redis.Port)})
 
 	if err != nil {
 
@@ -238,7 +308,7 @@ func handle(s *OutboundServer) {
 
 							} else {
 
-								RejectRequest("1", "3", originateSession, "ClientReject")
+								RejectRequest(1, 3, originateSession, "NoSession")
 
 								cmd := fmt.Sprintf("uuid_kill %s ", uniqueID)
 								Debug(cmd)
@@ -285,7 +355,7 @@ func handle(s *OutboundServer) {
 													conn.BgApi(cmd)
 													/////////////////////Remove///////////////////////
 
-													RemoveRequest("1", "3", originateSession)
+													RemoveRequest(1, 3, originateSession)
 
 												} else if event == "CHANNEL_HANGUP" {
 
@@ -298,7 +368,7 @@ func handle(s *OutboundServer) {
 															//////////////////////////////Reject//////////////////////////////////////////////
 															//http://localhost:2225/request/remove/company/tenant/sessionid
 
-															RejectRequest("1", "3", originateSession, "AgentRejected")
+															RejectRequest(1, 3, originateSession, "AgentRejected")
 
 														}
 													}
@@ -332,41 +402,8 @@ func handle(s *OutboundServer) {
 					Debug("Caller UUID: %s", uniqueID)
 
 					//////////////////////////////////////////Add to queue//////////////////////////////////////
-					var registered string
 
-					attrib := []string{"123456"}
-					f := RequestData{
-						Company:         1,
-						Tenant:          3,
-						Class:           "CALLSERVER",
-						Type:            "ARDS",
-						Category:        "CALL",
-						SessionId:       uniqueID,
-						RequestServerId: "1",
-						Priority:        "L",
-						OtherInfo:       "",
-						Attributes:      attrib,
-					}
-
-					postData := Request1{
-
-						Request1: f,
-					}
-
-					r := restclient.RequestResponse{
-						Url:    "http://192.168.0.25:2221/startArds/web/Start",
-						Method: "POST",
-						Data:   &postData,
-						Result: &registered,
-					}
-					status, err := restclient.Do(&r)
-					if err != nil {
-						//panic(err)
-						fmt.Printf("%s", err)
-					}
-					if status == 200 {
-						fmt.Printf(registered)
-					}
+					AddRequest(1, 3, uniqueID)
 
 					///////////////////////////////////////////////////////////////////////////////////////////
 
@@ -455,7 +492,7 @@ func handle(s *OutboundServer) {
 
 													//////////////////////////////Remove//////////////////////////////////////////////
 
-													RemoveRequest("1", "3", uniqueID)
+													RemoveRequest(1, 3, uniqueID)
 												}
 											}
 
