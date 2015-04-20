@@ -283,71 +283,75 @@ func handle(s *OutboundServer) {
 				if direction == "outbound" {
 					Debug("OutBound Call recived ---->")
 
-					if channelStatus != "answered" {
-						////////////////////////////////////////////////////////////
-						if len(originateSession) > 0 {
+					//if channelStatus != "answered" {
+					////////////////////////////////////////////////////////////
+					if len(originateSession) > 0 {
 
-							Debug("Original session found %s", originateSession)
+						Debug("Original session found %s", originateSession)
 
-							var isStored = true
-							partykey := fmt.Sprintf("ARDS:Leg:%s", uniqueID)
-							key := fmt.Sprintf("ARDS:Session:%s", originateSession)
+						var isStored = true
+						partykey := fmt.Sprintf("ARDS:Leg:%s", uniqueID)
+						key := fmt.Sprintf("ARDS:Session:%s", originateSession)
 
-							exsists, exsisterr := client.Exists(key)
-							if exsisterr == nil && exsists == true {
+						exsists, exsisterr := client.Exists(key)
+						if exsisterr == nil && exsists == true {
 
-								redisErr := client.SimpleSet(partykey, originateSession)
-								Debug("Store Data : %s ", redisErr)
-								isStored, redisErr = client.HSet(key, "AgentStatus", "AgentFound")
-								Debug("Store Data : %s %s", isStored, redisErr)
-								isStored, redisErr = client.HSet(key, "AgentUUID", uniqueID)
-								Debug("Store Data : %s %s", isStored, redisErr)
-								//msg, err = conn.Execute("wait_for_answer", "", true)
-								//Debug("wait for answer ----> %s", msg)
-								//msg, err = conn.ExecuteSet("CHANNEL_CONNECTION", "true", false)
-								//Debug("Set variable ----> %s", msg)
+							redisErr := client.SimpleSet(partykey, originateSession)
+							Debug("Store Data : %s ", redisErr)
+							isStored, redisErr = client.HSet(key, "AgentStatus", "AgentFound")
+							Debug("Store Data : %s %s", isStored, redisErr)
+							isStored, redisErr = client.HSet(key, "AgentUUID", uniqueID)
+							Debug("Store Data : %s %s", isStored, redisErr)
+							//msg, err = conn.Execute("wait_for_answer", "", true)
+							//Debug("wait for answer ----> %s", msg)
+							//msg, err = conn.ExecuteSet("CHANNEL_CONNECTION", "true", false)
+							//Debug("Set variable ----> %s", msg)
 
-							} else {
+						} else {
 
-								RejectRequest(1, 3, originateSession, "NoSession")
+							RejectRequest(1, 3, originateSession, "NoSession")
 
-								cmd := fmt.Sprintf("uuid_kill %s ", uniqueID)
-								Debug(cmd)
-								conn.BgApi(cmd)
+							cmd := fmt.Sprintf("uuid_kill %s ", uniqueID)
+							Debug(cmd)
+							conn.BgApi(cmd)
 
-							}
+						}
 
-							conn.Send("myevents json")
-							go func() {
-								for {
-									msg, err := conn.ReadMessage()
+						conn.Send("myevents json")
+						go func() {
 
-									if err != nil {
+							for {
+								msg, err := conn.ReadMessage()
 
-										// If it contains EOF, we really dont care...
-										if !strings.Contains(err.Error(), "EOF") {
-											Error("Error while reading Freeswitch message: %s", err)
+								if err != nil {
 
-										}
-										break
+									// If it contains EOF, we really dont care...
+									if !strings.Contains(err.Error(), "EOF") {
+										Error("Error while reading Freeswitch message: %s", err)
 
-									} else {
-										if msg != nil {
+									}
+									break
 
-											uuid := msg.GetHeader("Unique-ID")
-											Debug(uuid)
+								} else {
+									if msg != nil {
 
-											contentType := msg.GetHeader("Content-Type")
-											event := msg.GetHeader("Event-Name")
-											Debug("Content types -------------------->", contentType)
+										uuid := msg.GetHeader("Unique-ID")
+										Debug(uuid)
 
-											if contentType == "text/disconnect-notice" {
+										contentType := msg.GetHeader("Content-Type")
+										event := msg.GetHeader("Event-Name")
+										Debug("Content types -------------------->", contentType)
 
-												//key := fmt.Sprintf("ARDS:Session:%s", uniqueID)
+										if contentType == "text/disconnect-notice" {
 
-											} else {
+											//key := fmt.Sprintf("ARDS:Session:%s", uniqueID)
 
-												if event == "CHANNEL_ANSWER" {
+										} else {
+
+											if event == "CHANNEL_ANSWER" {
+
+												exsists, exsisterr := client.Exists(key)
+												if exsisterr == nil && exsists == true {
 
 													client.HSet(key, "AgentStatus", "AgentConnected")
 
@@ -358,40 +362,48 @@ func handle(s *OutboundServer) {
 
 													RemoveRequest(1, 3, originateSession)
 
-												} else if event == "CHANNEL_HANGUP" {
+												} else {
 
-													value1, getErr1 := client.HGet(key, "AgentStatus")
-													agentstatus := string(value1[:])
-													if getErr1 == nil {
+													RejectRequest(1, 3, originateSession, "NoSession")
 
-														if agentstatus != "AgentConnected" {
-
-															if agentstatus == "AgentKilling" {
-
-															} else {
-
-																//////////////////////////////Reject//////////////////////////////////////////////
-																//http://localhost:2225/request/remove/company/tenant/sessionid
-
-																RejectRequest(1, 3, originateSession, "AgentRejected")
-															}
-
-														}
-													}
+													conn.ExecuteHangup(uniqueID, "", false)
 
 												}
+
+											} else if event == "CHANNEL_HANGUP" {
+
+												value1, getErr1 := client.HGet(key, "AgentStatus")
+												agentstatus := string(value1[:])
+												if getErr1 == nil {
+
+													if agentstatus != "AgentConnected" {
+
+														if agentstatus == "AgentKilling" {
+
+														} else {
+
+															//////////////////////////////Reject//////////////////////////////////////////////
+															//http://localhost:2225/request/remove/company/tenant/sessionid
+
+															RejectRequest(1, 3, originateSession, "AgentRejected")
+														}
+
+													}
+												}
+
 											}
 										}
 									}
-
-									Debug("Got message: %s", msg)
 								}
-								Debug("Leaving go routing after everithing completed OutBound %s %s", key, partykey)
-								//client.Del(key)
-								client.Del(partykey)
-							}()
 
-						}
+								Debug("Got message: %s", msg)
+							}
+							Debug("Leaving go routing after everithing completed OutBound %s %s", key, partykey)
+							//client.Del(key)
+							client.Del(partykey)
+						}()
+
+						//}
 						/////////////////////////////////////////////////////////////
 					}
 
@@ -476,6 +488,8 @@ func handle(s *OutboundServer) {
 
 									} else {
 
+										Debug("Event -------------------->", event)
+
 										if event == "CHANNEL_EXECUTE_COMPLETE" && application == "playback" {
 
 											value1, getErr1 := client.HGet(key, "AgentStatus")
@@ -518,8 +532,11 @@ func handle(s *OutboundServer) {
 													}
 
 												}
+
 											}
 
+											client.Del(key)
+											client.Del(partykey)
 											conn.Exit()
 
 										} else if event == "CHANNEL_HANGUP_COMPLETED" {
