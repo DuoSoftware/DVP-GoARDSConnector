@@ -15,22 +15,22 @@ var (
 )
 
 type Config struct {
-	server struct {
+	Server struct {
 		Ip   string
 		Port int
 	}
 
-	dispatcher struct {
+	Dispatcher struct {
 		Ip   string
 		Port int
 	}
 
-	ards struct {
+	Ards struct {
 		Ip   string
 		Port int
 	}
 
-	redis struct {
+	Redis struct {
 		Ip   string
 		Port int
 	}
@@ -63,30 +63,12 @@ type Request1 struct {
 	Request1 RequestData
 }
 
-/*
-
-public class InputData
-    {
-        public int Company { get; set; }
-        public int Tenant { get; set; }
-        public string Class { get; set; }
-        public string Type { get; set; }
-        public string Category { get; set; }
-        public string SessionId { get; set; }
-        public List<string> Attributes { get; set; }
-        public string RequestServerId { get; set; }
-        public string Priority { get; set; }
-        public string OtherInfo { get; set; }
-    }
-
-*/
-
 var client *Redis
 var cfg Config
 
 func main() {
 
-	err := gcfg.ReadFileInto(&cfg, "config.ini")
+	err := gcfg.ReadFileInto(&cfg, "./config.ini")
 
 	defer func() {
 		if r := recover(); r != nil {
@@ -99,9 +81,11 @@ func main() {
 
 	///////////////////////register with ards as a requester//////////////////////////////////////////
 
-	callbakURL := fmt.Sprint("http://%s:%d/route", cfg.dispatcher.Ip, cfg.dispatcher.Port)
+	callbakURL := fmt.Sprintf("http://%s:%d/route", cfg.Dispatcher.Ip, cfg.Dispatcher.Port)
 
-	ardsADDServerURL := fmt.Sprint("http://%s:%d/requestserver/add", cfg.ards.Ip, cfg.ards.Port)
+	ardsADDServerURL := fmt.Sprintf("http://%s:%d/requestserver/add", cfg.Ards.Ip, cfg.Ards.Port)
+
+	fmt.Print(callbakURL)
 
 	registered := true
 
@@ -126,12 +110,12 @@ func main() {
 		//panic(err)
 	}
 	if status == 200 {
-		println(registered)
+		Debug("Registered %v", registered)
 	}
 
 	///////////////////////////////////////////////////////////////////////////////////////////////////////
 
-	if s, err := NewOutboundServer(fmt.Sprint(":%d", cfg.server.Port)); err != nil {
+	if s, err := NewOutboundServer(fmt.Sprintf(":%d", cfg.Server.Port)); err != nil {
 		Error("Got error while starting FreeSWITCH outbound server: %s", err)
 	} else {
 		go handle(s)
@@ -142,39 +126,52 @@ func main() {
 
 func RemoveRequest(company, tenant int, sessionid string) {
 
-	r := restclient.RequestResponse{
-		Url:    fmt.Sprintf("http://%s:%d/request/remove/%d/%d/%s", cfg.ards.Ip, cfg.ards.Port, company, tenant, sessionid),
-		Method: "DELETE",
-	}
-	status, err := restclient.Do(&r)
-	if err != nil {
-		//panic(err)
-		fmt.Printf("MSG error -------------------------------------> %s", err)
-	}
-	if status == 200 {
-		//fmt.Printf(registered)
-	}
+	go func() {
+
+		r := restclient.RequestResponse{
+			Url:    fmt.Sprintf("http://%s:%d/request/remove/%d/%d/%s", cfg.Ards.Ip, cfg.Ards.Port, company, tenant, sessionid),
+			Method: "DELETE",
+		}
+		status, err := restclient.Do(&r)
+		if err != nil {
+			//panic(err)
+			fmt.Printf("MSG error -------------------------------------> %s", err)
+		}
+		if status == 200 {
+			//fmt.Printf(registered)
+		}
+	}()
 
 }
 
 func RejectRequest(company, tenant int, sessionid, reason string) {
 
-	r := restclient.RequestResponse{
-		Url:    fmt.Sprintf("http://%s,%d/request/reject/%d/%d/%s/%s", cfg.ards.Ip, cfg.ards.Port, company, tenant, sessionid, reason),
-		Method: "DELETE",
-	}
-	status, err := restclient.Do(&r)
-	if err != nil {
-		//panic(err)
-		fmt.Printf("MSG error -------------------------------------> %s", err)
-	}
-	if status == 200 {
-		//fmt.Printf(registered)
-	}
+	go func() {
+
+		Debug("Reject request recived --------------->")
+
+		r := restclient.RequestResponse{
+			Url:    fmt.Sprintf("http://%s:%d/request/reject/%d/%d/%s/%s", cfg.Ards.Ip, cfg.Ards.Port, company, tenant, sessionid, reason),
+			Method: "DELETE",
+		}
+
+		Info(r.Url)
+
+		status, err := restclient.Do(&r)
+		if err != nil {
+			//panic(err)
+			fmt.Printf("MSG error -------------------------------------> %s", err)
+		}
+		if status == 200 {
+			//fmt.Printf(registered)
+		}
+	}()
 
 }
 
 func AddRequest(company, tenant int, sessionid string) {
+
+	Debug("Add ARDS item ----->")
 
 	var registered string
 
@@ -197,19 +194,23 @@ func AddRequest(company, tenant int, sessionid string) {
 		Request1: f,
 	}
 
+	//Url:    fmt.Sprintf("http://%s:%d/startArds/web/Start", cfg.Ards.Ip, cfg.Ards.Port),
 	r := restclient.RequestResponse{
-		Url:    fmt.Sprintf("http://%s,%d/startArds/web/Start", cfg.ards.Ip, cfg.ards.Port),
+		Url:    fmt.Sprintf("http://192.168.0.25:2221/startArds/web/Start"),
 		Method: "POST",
 		Data:   &postData,
 		Result: &registered,
 	}
+
+	Info(r.Url)
+
 	status, err := restclient.Do(&r)
 	if err != nil {
 		//panic(err)
-		fmt.Printf("%s", err)
+		Error("%s", err)
 	}
 	if status == 200 {
-		fmt.Printf(registered)
+		Debug(registered)
 	}
 
 }
@@ -217,7 +218,7 @@ func AddRequest(company, tenant int, sessionid string) {
 // handle - Running under goroutine here to explain how to run tts outbound server
 func handle(s *OutboundServer) {
 
-	client, err := Dial(&DialConfig{Address: fmt.Sprint("%s:%d", cfg.redis.Ip, cfg.redis.Port)})
+	client, err := Dial(&DialConfig{Address: fmt.Sprintf("%s:%d", cfg.Redis.Ip, cfg.Redis.Port)})
 
 	if err != nil {
 
@@ -365,10 +366,15 @@ func handle(s *OutboundServer) {
 
 														if agentstatus != "AgentConnected" {
 
-															//////////////////////////////Reject//////////////////////////////////////////////
-															//http://localhost:2225/request/remove/company/tenant/sessionid
+															if agentstatus == "AgentKilling" {
 
-															RejectRequest(1, 3, originateSession, "AgentRejected")
+															} else {
+
+																//////////////////////////////Reject//////////////////////////////////////////////
+																//http://localhost:2225/request/remove/company/tenant/sessionid
+
+																RejectRequest(1, 3, originateSession, "AgentRejected")
+															}
 
 														}
 													}
@@ -423,6 +429,7 @@ func handle(s *OutboundServer) {
 					Debug("Store Data : %s %s ", redisErr, isStored)
 
 					conn.Send("myevents json")
+					conn.Send("linger")
 					if sm, err := conn.Execute("playback", "local_stream://moh", false); err != nil {
 						Error("Got error while executing speak: %s", err)
 
@@ -486,15 +493,38 @@ func handle(s *OutboundServer) {
 
 											value1, getErr1 := client.HGet(key, "AgentStatus")
 											agentstatus := string(value1[:])
+
+											value2, _ := client.HGet(key, "AgentUUID")
+											sValue2 := string(value2[:])
 											if getErr1 == nil {
 
 												if agentstatus != "AgentConnected" {
 
 													//////////////////////////////Remove//////////////////////////////////////////////
 
-													RemoveRequest(1, 3, uniqueID)
+													if agentstatus == "AgentFound" {
+
+														client.HSet(key, "AgentStatus", "AgentKilling")
+
+														cmd := fmt.Sprintf("uuid_kill %s ", sValue2)
+														Debug(cmd)
+														conn.Api(cmd)
+
+														RejectRequest(1, 3, uniqueID, "ClientRejected")
+
+													} else {
+														RemoveRequest(1, 3, uniqueID)
+
+													}
+
 												}
 											}
+
+											conn.Exit()
+
+										} else if event == "CHANNEL_HANGUP_COMPLETED" {
+
+											conn.Close()
 
 										}
 									}
