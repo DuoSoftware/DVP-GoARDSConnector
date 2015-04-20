@@ -7,6 +7,7 @@ import (
 	"github.com/jmcvetta/restclient"
 	. "github.com/xuyu/goredis"
 	"runtime"
+	"strconv"
 	"strings"
 )
 
@@ -169,13 +170,13 @@ func RejectRequest(company, tenant int, sessionid, reason string) {
 
 }
 
-func AddRequest(company, tenant int, sessionid string) {
+func AddRequest(company, tenant int, sessionid string, skills []string) {
 
 	Debug("Add ARDS item ----->")
 
 	var registered string
 
-	attrib := []string{"123456"}
+	//attrib := []string{"123456"}
 	f := RequestData{
 		Company:         company,
 		Tenant:          tenant,
@@ -186,7 +187,7 @@ func AddRequest(company, tenant int, sessionid string) {
 		RequestServerId: "1",
 		Priority:        "L",
 		OtherInfo:       "",
-		Attributes:      attrib,
+		Attributes:      skills,
 	}
 
 	postData := Request1{
@@ -253,6 +254,9 @@ func handle(s *OutboundServer) {
 				direction := msg.GetHeader("Call-Direction")
 				channelStatus := msg.GetHeader("Answer-State")
 				originateSession := msg.GetHeader("Variable_originate_session_uuid")
+				company := msg.GetHeader("Variable_company")
+				tenant := msg.GetHeader("Variable_tenant")
+				skill := msg.GetHeader("Variable_skill")
 				fsUUID := msg.GetHeader("Core-Uuid")
 				fsHost := msg.GetHeader("Freeswitch-Hostname")
 				fsName := msg.GetHeader("Freeswitch-Switchname")
@@ -279,6 +283,12 @@ func handle(s *OutboundServer) {
 				Debug(fsIP)
 				Debug(originateSession)
 				Debug(callerContext)
+				Debug(company)
+				Debug(tenant)
+				Debug(skill)
+
+				comapnyi, _ := strconv.Atoi(company)
+				tenanti, _ := strconv.Atoi(tenant)
 
 				if direction == "outbound" {
 					Debug("OutBound Call recived ---->")
@@ -360,11 +370,11 @@ func handle(s *OutboundServer) {
 													conn.BgApi(cmd)
 													/////////////////////Remove///////////////////////
 
-													RemoveRequest(1, 3, originateSession)
+													RemoveRequest(comapnyi, tenanti, originateSession)
 
 												} else {
 
-													RejectRequest(1, 3, originateSession, "NoSession")
+													RejectRequest(comapnyi, tenanti, originateSession, "NoSession")
 
 													conn.ExecuteHangup(uniqueID, "", false)
 
@@ -385,7 +395,7 @@ func handle(s *OutboundServer) {
 															//////////////////////////////Reject//////////////////////////////////////////////
 															//http://localhost:2225/request/remove/company/tenant/sessionid
 
-															RejectRequest(1, 3, originateSession, "AgentRejected")
+															RejectRequest(comapnyi, tenanti, originateSession, "AgentRejected")
 														}
 
 													}
@@ -420,8 +430,8 @@ func handle(s *OutboundServer) {
 					Debug("Caller UUID: %s", uniqueID)
 
 					//////////////////////////////////////////Add to queue//////////////////////////////////////
-
-					AddRequest(1, 3, uniqueID)
+					skills := []string{skill}
+					AddRequest(comapnyi, tenanti, uniqueID, skills)
 
 					///////////////////////////////////////////////////////////////////////////////////////////
 
@@ -524,10 +534,10 @@ func handle(s *OutboundServer) {
 														Debug(cmd)
 														conn.Api(cmd)
 
-														RejectRequest(1, 3, uniqueID, "ClientRejected")
+														RejectRequest(comapnyi, tenanti, uniqueID, "ClientRejected")
 
 													} else {
-														RemoveRequest(1, 3, uniqueID)
+														RemoveRequest(comapnyi, tenanti, uniqueID)
 
 													}
 
