@@ -197,7 +197,7 @@ func AddRequest(company, tenant int, sessionid string, skills []string) {
 
 	//Url:    fmt.Sprintf("http://%s:%d/startArds/web/Start", cfg.Ards.Ip, cfg.Ards.Port),
 	r := restclient.RequestResponse{
-		Url:    fmt.Sprintf("http://192.168.0.25:2221/startArds/web/Start"),
+		Url:    fmt.Sprintf("http://192.168.3.13:2221/startArds/web/Start"),
 		Method: "POST",
 		Data:   &postData,
 		Result: &registered,
