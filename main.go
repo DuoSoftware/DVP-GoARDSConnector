@@ -197,7 +197,7 @@ func AddRequest(company, tenant int, sessionid string, skills []string) {
 
 	//Url:    fmt.Sprintf("http://%s:%d/startArds/web/Start", cfg.Ards.Ip, cfg.Ards.Port),
 	r := restclient.RequestResponse{
-		Url:    fmt.Sprintf("http://192.168.3.13:2221/startArds/web/Start"),
+		Url:    fmt.Sprintf("http://192.168.3.12:2221/startArds/web/Start"),
 		Method: "POST",
 		Data:   &postData,
 		Result: &registered,
@@ -304,7 +304,11 @@ func handle(s *OutboundServer) {
 						key := fmt.Sprintf("ARDS:Session:%s", originateSession)
 
 						exsists, exsisterr := client.Exists(key)
-						if exsisterr == nil && exsists == true {
+						agentStatusRaw, _ := client.HGet(key, "AgentStatus")
+						agentstatus := string(agentStatusRaw[:])
+
+						Debug("Client exsists ----------------------->%s", agentstatus)
+						if exsisterr == nil && exsists == true && agentstatus == "NotFound" {
 
 							redisErr := client.SimpleSet(partykey, originateSession)
 							Debug("Store Data : %s ", redisErr)
@@ -317,104 +321,133 @@ func handle(s *OutboundServer) {
 							//msg, err = conn.ExecuteSet("CHANNEL_CONNECTION", "true", false)
 							//Debug("Set variable ----> %s", msg)
 
-						} else {
+							if channelStatus == "answered" {
 
-							RejectRequest(1, 3, originateSession, "NoSession")
+								exsists, exsisterr := client.Exists(key)
+								if exsisterr == nil && exsists == true {
 
-							cmd := fmt.Sprintf("uuid_kill %s ", uniqueID)
-							Debug(cmd)
-							conn.BgApi(cmd)
+									client.HSet(key, "AgentStatus", "AgentConnected")
 
-						}
+									cmd := fmt.Sprintf("uuid_bridge %s %s", originateSession, uniqueID)
+									Debug(cmd)
+									conn.BgApi(cmd)
+									/////////////////////Remove///////////////////////
 
-						conn.Send("myevents json")
-						go func() {
-
-							for {
-								msg, err := conn.ReadMessage()
-
-								if err != nil {
-
-									// If it contains EOF, we really dont care...
-									if !strings.Contains(err.Error(), "EOF") {
-										Error("Error while reading Freeswitch message: %s", err)
-
-									}
-									break
+									RemoveRequest(comapnyi, tenanti, originateSession)
 
 								} else {
-									if msg != nil {
 
-										uuid := msg.GetHeader("Unique-ID")
-										Debug(uuid)
+									RejectRequest(comapnyi, tenanti, originateSession, "NoSession")
 
-										contentType := msg.GetHeader("Content-Type")
-										event := msg.GetHeader("Event-Name")
-										Debug("Content types -------------------->", contentType)
+									conn.ExecuteHangup(uniqueID, "", false)
 
-										if contentType == "text/disconnect-notice" {
+								}
 
-											//key := fmt.Sprintf("ARDS:Session:%s", uniqueID)
+							}
 
-										} else {
+							conn.Send("myevents json")
+							go func() {
 
-											if event == "CHANNEL_ANSWER" {
+								for {
+									msg, err := conn.ReadMessage()
 
-												exsists, exsisterr := client.Exists(key)
-												if exsisterr == nil && exsists == true {
+									if err != nil {
 
-													client.HSet(key, "AgentStatus", "AgentConnected")
+										// If it contains EOF, we really dont care...
+										if !strings.Contains(err.Error(), "EOF") {
+											Error("Error while reading Freeswitch message: %s", err)
 
-													cmd := fmt.Sprintf("uuid_bridge %s %s", originateSession, uniqueID)
-													Debug(cmd)
-													conn.BgApi(cmd)
-													/////////////////////Remove///////////////////////
+										}
+										break
 
-													RemoveRequest(comapnyi, tenanti, originateSession)
+									} else {
+										if msg != nil {
 
-												} else {
+											uuid := msg.GetHeader("Unique-ID")
+											Debug(uuid)
 
-													RejectRequest(comapnyi, tenanti, originateSession, "NoSession")
+											contentType := msg.GetHeader("Content-Type")
+											event := msg.GetHeader("Event-Name")
+											Debug("Content types -------------------->", contentType)
 
-													conn.ExecuteHangup(uniqueID, "", false)
+											if contentType == "text/disconnect-notice" {
 
-												}
+												//key := fmt.Sprintf("ARDS:Session:%s", uniqueID)
 
-											} else if event == "CHANNEL_HANGUP" {
+											} else {
 
-												value1, getErr1 := client.HGet(key, "AgentStatus")
-												agentstatus := string(value1[:])
-												if getErr1 == nil {
+												if event == "CHANNEL_ANSWER" {
 
-													if agentstatus != "AgentConnected" {
+													fmt.Printf("%s", event)
 
-														if agentstatus == "AgentKilling" {
+													exsists, exsisterr := client.Exists(key)
+													if exsisterr == nil && exsists == true {
 
-														} else {
+														client.HSet(key, "AgentStatus", "AgentConnected")
 
-															//////////////////////////////Reject//////////////////////////////////////////////
-															//http://localhost:2225/request/remove/company/tenant/sessionid
+														cmd := fmt.Sprintf("uuid_bridge %s %s", originateSession, uniqueID)
+														Debug(cmd)
+														conn.BgApi(cmd)
+														/////////////////////Remove///////////////////////
 
-															RejectRequest(comapnyi, tenanti, originateSession, "AgentRejected")
-														}
+														RemoveRequest(comapnyi, tenanti, originateSession)
+
+													} else {
+
+														RejectRequest(comapnyi, tenanti, originateSession, "NoSession")
+
+														conn.ExecuteHangup(uniqueID, "", false)
 
 													}
-												}
 
+												} else if event == "CHANNEL_HANGUP" {
+
+													value1, getErr1 := client.HGet(key, "AgentStatus")
+													agentstatus := string(value1[:])
+													if getErr1 == nil {
+
+														if agentstatus != "AgentConnected" {
+
+															if agentstatus == "AgentKilling" {
+
+															} else {
+
+																//////////////////////////////Reject//////////////////////////////////////////////
+																//http://localhost:2225/request/remove/company/tenant/sessionid
+
+																RejectRequest(comapnyi, tenanti, originateSession, "AgentRejected")
+
+																Debug("Store Data : %s ", redisErr)
+																isStored, redisErr = client.HSet(key, "AgentStatus", "NotFound")
+																Debug("Store Data : %s %s ", redisErr, isStored)
+															}
+
+														}
+													}
+
+												}
 											}
 										}
 									}
+
+									Debug("Got message: %s", msg)
 								}
+								Debug("Leaving go routing after everithing completed OutBound %s %s", key, partykey)
+								//client.Del(key)
+								client.Del(partykey)
+							}()
 
-								Debug("Got message: %s", msg)
-							}
-							Debug("Leaving go routing after everithing completed OutBound %s %s", key, partykey)
-							//client.Del(key)
-							client.Del(partykey)
-						}()
+							//}
+							/////////////////////////////////////////////////////////////
+						}
+					} else {
 
-						//}
-						/////////////////////////////////////////////////////////////
+						RejectRequest(1, 3, originateSession, "NoSession")
+
+						cmd := fmt.Sprintf("uuid_kill %s ", uniqueID)
+						Debug(cmd)
+						conn.BgApi(cmd)
+
 					}
 
 				} else {
