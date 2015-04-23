@@ -418,7 +418,12 @@ func handle(s *OutboundServer) {
 																RejectRequest(comapnyi, tenanti, originateSession, "AgentRejected")
 
 																Debug("Store Data : %s ", redisErr)
-																isStored, redisErr = client.HSet(key, "AgentStatus", "NotFound")
+
+																val, _ := client.HExists(key, "AgentStatus")
+
+																if val == true {
+																	isStored, redisErr = client.HSet(key, "AgentStatus", "NotFound")
+																}
 																Debug("Store Data : %s %s ", redisErr, isStored)
 															}
 
@@ -439,6 +444,7 @@ func handle(s *OutboundServer) {
 
 							//}
 							/////////////////////////////////////////////////////////////
+
 						}
 					} else {
 
